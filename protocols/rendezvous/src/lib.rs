@@ -24,7 +24,7 @@
 
 use libp2p_swarm::StreamProtocol;
 
-pub use self::codec::{Cookie, ErrorCode, Namespace, NamespaceTooLong, Registration, Ttl};
+pub use self::codec::{Cookie, ErrorCode, Namespace, NamespaceTooLong, Registration, Ttl, NewRegistration};
 
 mod codec;
 

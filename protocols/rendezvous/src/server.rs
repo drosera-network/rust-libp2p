@@ -85,6 +85,10 @@ impl Behaviour {
             registrations: Registrations::with_config(config),
         }
     }
+
+    pub fn add_registration(&mut self, registration: NewRegistration) -> Result<Registration, TtlOutOfRange> {
+        self.registrations.add(registration)
+    }
 }
 
 #[derive(Debug)]
