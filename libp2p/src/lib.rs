@@ -36,6 +36,9 @@ pub use bytes;
 pub use futures;
 #[doc(inline)]
 pub use libp2p_allow_block_list as allow_block_list;
+#[cfg(feature = "auth-rendezvous")]
+#[doc(inline)]
+pub use libp2p_auth_rendezvous as auth_rendezvous;
 #[cfg(feature = "autonat")]
 #[doc(inline)]
 pub use libp2p_autonat as autonat;
