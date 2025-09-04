@@ -2475,6 +2475,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "libp2p-auth-rendezvous"
+version = "0.17.0"
+dependencies = [
+ "async-trait",
+ "asynchronous-codec",
+ "bimap",
+ "futures",
+ "futures-timer",
+ "libp2p-core",
+ "libp2p-identity",
+ "libp2p-request-response",
+ "libp2p-swarm",
+ "libp2p-swarm-test",
+ "quick-protobuf",
+ "quick-protobuf-codec",
+ "rand 0.8.5",
+ "thiserror 2.0.12",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "web-time 1.1.0",
+]
+
+[[package]]
 name = "libp2p-autonat"
 version = "0.15.0"
 dependencies = [
