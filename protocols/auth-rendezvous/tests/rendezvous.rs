@@ -451,7 +451,7 @@ async fn new_server_with_connected_clients<const N: usize>(
     config: rendezvous::server::Config,
 ) -> (
     [Swarm<rendezvous::client::Behaviour>; N],
-    Swarm<rendezvous::server::Behaviour>,
+    Swarm<rendezvous::server::Behaviour<MockAuthorizer>>,
 ) {
     let mut server = new_server(config).await;
 
@@ -473,6 +473,14 @@ async fn new_server_with_connected_clients<const N: usize>(
     (clients, server)
 }
 
+struct MockAuthorizer;
+
+impl rendezvous::server::Authorizer for MockAuthorizer {
+    fn is_authorized(&self, _: &PeerId, _: Option<&Namespace>, _: Option<&Vec<u8>>) -> bool {
+        true
+    }
+}
+
 async fn new_client() -> Swarm<rendezvous::client::Behaviour> {
     let mut client = Swarm::new_ephemeral_tokio(rendezvous::client::Behaviour::new);
     client.listen().with_memory_addr_external().await; // we need to listen otherwise we don't have addresses to register
@@ -480,10 +488,12 @@ async fn new_client() -> Swarm<rendezvous::client::Behaviour> {
     client
 }
 
-async fn new_server(config: rendezvous::server::Config) -> Swarm<rendezvous::server::Behaviour> {
-    let authorize_fn = Box::new(|_: &PeerId, _: Option<&Namespace>, _: &Option<Vec<u8>>| true);
+async fn new_server(
+    config: rendezvous::server::Config,
+) -> Swarm<rendezvous::server::Behaviour<MockAuthorizer>> {
+    let authorizer = MockAuthorizer;
     let mut server =
-        Swarm::new_ephemeral_tokio(|_| rendezvous::server::Behaviour::new(config, authorize_fn));
+        Swarm::new_ephemeral_tokio(|_| rendezvous::server::Behaviour::new(config, authorizer));
 
     server.listen().with_memory_addr_external().await;
 
@@ -491,12 +501,12 @@ async fn new_server(config: rendezvous::server::Config) -> Swarm<rendezvous::ser
 }
 
 async fn new_combined_node() -> Swarm<Combined> {
-    let authorize_fn = Box::new(|_: &PeerId, _: Option<&Namespace>, _: &Option<Vec<u8>>| true);
+    let authorizer = MockAuthorizer;
     let mut node = Swarm::new_ephemeral_tokio(|identity| Combined {
         client: rendezvous::client::Behaviour::new(identity),
         server: rendezvous::server::Behaviour::new(
             rendezvous::server::Config::default(),
-            authorize_fn,
+            authorizer,
         ),
     });
     node.listen().with_memory_addr_external().await;
@@ -522,5 +532,5 @@ async fn new_impersonating_client() -> Swarm<rendezvous::client::Behaviour> {
 #[behaviour(prelude = "libp2p_swarm::derive_prelude")]
 struct Combined {
     client: rendezvous::client::Behaviour,
-    server: rendezvous::server::Behaviour,
+    server: rendezvous::server::Behaviour<MockAuthorizer>,
 }

@@ -40,15 +40,20 @@ use crate::{
     MAX_TTL, MIN_TTL,
 };
 
-pub type AuthorizeFn =
-    Box<dyn Fn(&PeerId, Option<&Namespace>, &Option<Vec<u8>>) -> bool + Send + Sync>;
+pub trait Authorizer: Send + Sync + 'static {
+    fn is_authorized(
+        &self,
+        peer_id: &PeerId,
+        namespace: Option<&Namespace>,
+        auth_token: Option<&Vec<u8>>,
+    ) -> bool;
+}
 
-pub struct Behaviour {
+pub struct Behaviour<A: Authorizer> {
     inner: libp2p_request_response::Behaviour<crate::codec::Codec>,
 
     registrations: Registrations,
-    authorized_peers: HashMap<Vec<u8>, HashSet<Vec<u8>>>,
-    authorize_fn: AuthorizeFn,
+    authorizer: A,
 }
 
 pub struct Config {
@@ -77,9 +82,9 @@ impl Default for Config {
     }
 }
 
-impl Behaviour {
+impl<A: Authorizer> Behaviour<A> {
     /// Create a new instance of the rendezvous [`NetworkBehaviour`].
-    pub fn new(config: Config, authorize_fn: AuthorizeFn) -> Self {
+    pub fn new(config: Config, authorizer: A) -> Self {
         Self {
             inner: libp2p_request_response::Behaviour::with_codec(
                 crate::codec::Codec::default(),
@@ -88,8 +93,7 @@ impl Behaviour {
             ),
 
             registrations: Registrations::with_config(config),
-            authorized_peers: HashMap::new(),
-            authorize_fn: authorize_fn,
+            authorizer,
         }
     }
 
@@ -100,8 +104,131 @@ impl Behaviour {
         self.registrations.add(registration)
     }
 
-    pub fn add_authorized_peer_set(&mut self, namespace: Vec<u8>, set: HashSet<Vec<u8>>) {
-        self.authorized_peers.insert(namespace, set);
+    fn handle_request(
+        &mut self,
+        peer_id: PeerId,
+        message: Message,
+    ) -> Option<(Event, Option<Message>)> {
+        match message {
+            Message::Register {
+                new_registration: registration,
+                auth_token,
+            } => {
+                if registration.record.peer_id() != peer_id {
+                    let error = ErrorCode::NotAuthorized;
+
+                    let event = Event::PeerNotRegistered {
+                        peer: peer_id,
+                        namespace: registration.namespace,
+                        error,
+                    };
+
+                    return Some((event, Some(Message::RegisterResponse(Err(error)))));
+                }
+
+                if !self.authorizer.is_authorized(
+                    &peer_id,
+                    Some(&registration.namespace),
+                    auth_token.as_ref(),
+                ) {
+                    let error = ErrorCode::NotAuthorized;
+
+                    let event = Event::PeerNotRegistered {
+                        peer: peer_id,
+                        namespace: registration.namespace,
+                        error,
+                    };
+
+                    return Some((event, Some(Message::RegisterResponse(Err(error)))));
+                }
+
+                let namespace = registration.namespace.clone();
+
+                match self.registrations.add(registration) {
+                    Ok(registration) => {
+                        let response = Message::RegisterResponse(Ok(registration.ttl));
+
+                        let event = Event::PeerRegistered {
+                            peer: peer_id,
+                            registration,
+                        };
+
+                        Some((event, Some(response)))
+                    }
+                    Err(TtlOutOfRange::TooLong { .. }) | Err(TtlOutOfRange::TooShort { .. }) => {
+                        let error = ErrorCode::InvalidTtl;
+
+                        let response = Message::RegisterResponse(Err(error));
+
+                        let event = Event::PeerNotRegistered {
+                            peer: peer_id,
+                            namespace,
+                            error,
+                        };
+
+                        Some((event, Some(response)))
+                    }
+                }
+            }
+            Message::Unregister(namespace) => {
+                self.registrations.remove(namespace.clone(), peer_id);
+
+                let event = Event::PeerUnregistered {
+                    peer: peer_id,
+                    namespace,
+                };
+
+                Some((event, None))
+            }
+            Message::Discover {
+                namespace,
+                cookie,
+                limit,
+                auth_token,
+            } => {
+                if !self
+                    .authorizer
+                    .is_authorized(&peer_id, namespace.as_ref(), auth_token.as_ref())
+                {
+                    let error = ErrorCode::NotAuthorized;
+                    let response = Message::DiscoverResponse(Err(error));
+                    let event = Event::DiscoverNotServed {
+                        enquirer: peer_id,
+                        error,
+                    };
+                    return Some((event, Some(response)));
+                }
+
+                match self.registrations.get(namespace, cookie, limit) {
+                    Ok((registrations, cookie)) => {
+                        let discovered = registrations.cloned().collect::<Vec<_>>();
+
+                        let response = Message::DiscoverResponse(Ok((discovered.clone(), cookie)));
+
+                        let event = Event::DiscoverServed {
+                            enquirer: peer_id,
+                            registrations: discovered,
+                        };
+
+                        Some((event, Some(response)))
+                    }
+                    Err(_) => {
+                        let error = ErrorCode::InvalidCookie;
+
+                        let response = Message::DiscoverResponse(Err(error));
+
+                        let event = Event::DiscoverNotServed {
+                            enquirer: peer_id,
+                            error,
+                        };
+
+                        Some((event, Some(response)))
+                    }
+                }
+            }
+            Message::RegisterResponse(_) => None,
+            Message::DiscoverResponse(_) => None,
+        }
     }
 }
 
@@ -132,7 +259,7 @@ pub enum Event {
     RegistrationExpired(Registration),
 }
 
-impl NetworkBehaviour for Behaviour {
+impl<A: Authorizer> NetworkBehaviour for Behaviour<A> {
     type ConnectionHandler = <libp2p_request_response::Behaviour<
         crate::codec::Codec,
     > as NetworkBehaviour>::ConnectionHandler;
@@ -203,12 +330,7 @@ impl NetworkBehaviour for Behaviour {
                             },
                         ..
                     }) => {
-                        if let Some((event, response)) = handle_request(
-                            peer_id,
-                            request,
-                            &mut self.registrations,
-                            &self.authorize_fn,
-                        ) {
+                        if let Some((event, response)) = self.handle_request(peer_id, request) {
                             if let Some(resp) = response {
                                 if let Err(resp) = self.inner.send_response(channel, resp) {
                                     tracing::debug!(
@@ -265,127 +387,6 @@ impl NetworkBehaviour for Behaviour {
 
     fn on_swarm_event(&mut self, event: FromSwarm) {
         self.inner.on_swarm_event(event);
-    }
-}
-
-fn handle_request(
-    peer_id: PeerId,
-    message: Message,
-    registrations: &mut Registrations,
-    authorize_fn: &AuthorizeFn,
-) -> Option<(Event, Option<Message>)> {
-    match message {
-        Message::Register {
-            new_registration: registration,
-            auth_token,
-        } => {
-            if registration.record.peer_id() != peer_id {
-                let error = ErrorCode::NotAuthorized;
-
-                let event = Event::PeerNotRegistered {
-                    peer: peer_id,
-                    namespace: registration.namespace,
-                    error,
-                };
-
-                return Some((event, Some(Message::RegisterResponse(Err(error)))));
-            }
-
-            if !(*authorize_fn)(&peer_id, Some(&registration.namespace), &auth_token) {
-                let error = ErrorCode::NotAuthorized;
-
-                let event = Event::PeerNotRegistered {
-                    peer: peer_id,
-                    namespace: registration.namespace,
-                    error,
-                };
-
-                return Some((event, Some(Message::RegisterResponse(Err(error)))));
-            }
-
-            let namespace = registration.namespace.clone();
-
-            match registrations.add(registration) {
-                Ok(registration) => {
-                    let response = Message::RegisterResponse(Ok(registration.ttl));
-
-                    let event = Event::PeerRegistered {
-                        peer: peer_id,
-                        registration,
-                    };
-
-                    Some((event, Some(response)))
-                }
-                Err(TtlOutOfRange::TooLong { .. }) | Err(TtlOutOfRange::TooShort { .. }) => {
-                    let error = ErrorCode::InvalidTtl;
-
-                    let response = Message::RegisterResponse(Err(error));
-
-                    let event = Event::PeerNotRegistered {
-                        peer: peer_id,
-                        namespace,
-                        error,
-                    };
-
-                    Some((event, Some(response)))
-                }
-            }
-        }
-        Message::Unregister(namespace) => {
-            registrations.remove(namespace.clone(), peer_id);
-
-            let event = Event::PeerUnregistered {
-                peer: peer_id,
-                namespace,
-            };
-
-            Some((event, None))
-        }
-        Message::Discover {
-            namespace,
-            cookie,
-            limit,
-            auth_token,
-        } => {
-            if !(*authorize_fn)(&peer_id, namespace.as_ref(), &auth_token) {
-                let error = ErrorCode::NotAuthorized;
-                let response = Message::DiscoverResponse(Err(error));
-                let event = Event::DiscoverNotServed {
-                    enquirer: peer_id,
-                    error,
-                };
-                return Some((event, Some(response)));
-            }
-
-            match registrations.get(namespace, cookie, limit) {
-                Ok((registrations, cookie)) => {
-                    let discovered = registrations.cloned().collect::<Vec<_>>();
-
-                    let response = Message::DiscoverResponse(Ok((discovered.clone(), cookie)));
-
-                    let event = Event::DiscoverServed {
-                        enquirer: peer_id,
-                        registrations: discovered,
-                    };
-
-                    Some((event, Some(response)))
-                }
-                Err(_) => {
-                    let error = ErrorCode::InvalidCookie;
-
-                    let response = Message::DiscoverResponse(Err(error));
-
-                    let event = Event::DiscoverNotServed {
-                        enquirer: peer_id,
-                        error,
-                    };
-
-                    Some((event, Some(response)))
-                }
-            }
-        }
-        Message::RegisterResponse(_) => None,
-        Message::DiscoverResponse(_) => None,
     }
 }
 
