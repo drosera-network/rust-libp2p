@@ -72,6 +72,7 @@ plaintext = ["dep:libp2p-plaintext"]
 pnet = ["dep:libp2p-pnet"]
 quic = ["dep:libp2p-quic"]
 relay = ["dep:libp2p-relay", "libp2p-metrics?/relay"]
+auth-rendezvous = ["dep:libp2p-auth-rendezvous"]
 rendezvous = ["dep:libp2p-rendezvous"]
 request-response = ["dep:libp2p-request-response"]
 rsa = ["libp2p-identity/rsa"]
@@ -113,6 +114,7 @@ libp2p-ping = { workspace = true, optional = true }
 libp2p-plaintext = { workspace = true, optional = true }
 libp2p-pnet = { workspace = true, optional = true }
 libp2p-relay = { workspace = true, optional = true }
+libp2p-auth-rendezvous = { workspace = true, optional = true }
 libp2p-rendezvous = { workspace = true, optional = true }
 libp2p-request-response = { workspace = true, optional = true }
 libp2p-swarm = { workspace = true }

@@ -2422,6 +2422,7 @@ dependencies = [
  "futures-timer",
  "getrandom 0.2.15",
  "libp2p-allow-block-list",
+ "libp2p-auth-rendezvous",
  "libp2p-autonat",
  "libp2p-connection-limits",
  "libp2p-core",
@@ -2472,6 +2473,30 @@ dependencies = [
  "libp2p-swarm-derive",
  "libp2p-swarm-test",
  "tokio",
+]
+
+[[package]]
+name = "libp2p-auth-rendezvous"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "asynchronous-codec",
+ "bimap",
+ "futures",
+ "futures-timer",
+ "libp2p-core",
+ "libp2p-identity",
+ "libp2p-request-response",
+ "libp2p-swarm",
+ "libp2p-swarm-test",
+ "quick-protobuf",
+ "quick-protobuf-codec",
+ "rand 0.8.5",
+ "thiserror 2.0.12",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "web-time 1.1.0",
 ]
 
 [[package]]
